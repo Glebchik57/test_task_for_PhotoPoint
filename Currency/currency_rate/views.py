@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from django.http import JsonResponse
 from django.http import HttpResponse
@@ -6,26 +6,30 @@ import requests
 
 from .models import Cost_of_currency
 
-URL = 'https://api.exchangerate-api.com/v4/latest/USD'
+URL = 'https://www.cbr-xml-daily.ru/daily_json.js'
 
 
-def get_data():
+def make_data():
+    '''Формирует json ответ'''
     if Cost_of_currency.objects.count() == 0:
-        return 'записей нет'
+        return HttpResponse('записей нет')
     elif Cost_of_currency.objects.count() < 11:
-        previous = Cost_of_currency.objects.all()[1:]
+        previous = list(Cost_of_currency.objects.values('value')[1:])
     else:
-        previous = Cost_of_currency.objects.all()[1:10]
-    current = Cost_of_currency.objects.latest('id')
+        previous = list(Cost_of_currency.objects.values('value')[1:10])
+    current = Cost_of_currency.objects.latest('id').value
     return JsonResponse(
-        {'актуальный курс': current, 'последние 10 запросов': previous}
+        {'current value': current, 'last values': previous}
     )
 
 
-def save_current():
+def save_rate():
+    '''Запрашивает у API курс доллара и сохраняет его в базу'''
     try:
-        data = requests.get(URL)
-        usd_to_rub = data['rates']['RUB']
+        data = requests.get(
+            URL
+        ).json()
+        usd_to_rub = round(float(data['Valute']['USD']['Value']), 2)
     except Exception as error:
         return HttpResponse(
             f'проблема с подключением к api. причина {error}',
@@ -35,10 +39,16 @@ def save_current():
         Cost_of_currency.objects.create(value=usd_to_rub)
 
 
-def get_current_usd(request):
-    timeout =  11 # '''datetime.now() - Cost_of_currency.objects.latest('date').date'''
-    if timeout >= 10: # .total_seconds()
-        save_current()
-        return get_data()
+def current_usd(request):
+    '''Основная логика работы сервиса'''
+    if Cost_of_currency.objects.all().exists():
+        timeout = datetime.now(timezone.utc) - Cost_of_currency.objects.latest('date').date
+        if timeout.total_seconds() >= 10:
+            save_rate()
+            return make_data()
+        else:
+            return HttpResponse('превышено количество запросов', status=429)
     else:
-        return HttpResponse('превышено количество запросов', status=429)
+        save_rate()
+        current = Cost_of_currency.objects.latest('id').value
+        return JsonResponse({'value': current})
