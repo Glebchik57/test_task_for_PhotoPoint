@@ -11,8 +11,8 @@ URL = 'https://www.cbr-xml-daily.ru/daily_json.js'
 
 def make_data():
     '''Формирует json ответ'''
-    if Cost_of_currency.objects.count() == 0:
-        return HttpResponse('записей нет')
+    if not Cost_of_currency.objects.all().exists():
+        previous = []
     elif Cost_of_currency.objects.count() < 11:
         previous = list(Cost_of_currency.objects.values('value')[1:])
     else:
@@ -30,25 +30,34 @@ def save_rate():
             URL
         ).json()
         usd_to_rub = round(float(data['Valute']['USD']['Value']), 2)
-    except Exception as error:
-        return HttpResponse(
-            f'проблема с подключением к api. причина {error}',
-            status=500
-        )
+    except Exception:
+        raise
     else:
         Cost_of_currency.objects.create(value=usd_to_rub)
 
 
 def current_usd(request):
     '''Основная логика работы сервиса'''
+    exc = HttpResponse(
+            'проблема с подключением к api',
+            status=500
+        )
     if Cost_of_currency.objects.all().exists():
         timeout = datetime.now(timezone.utc) - Cost_of_currency.objects.latest('date').date
         if timeout.total_seconds() >= 10:
-            save_rate()
-            return make_data()
+            try:
+                save_rate()
+            except Exception:
+                return exc
+            else:
+                return make_data()
         else:
             return HttpResponse('превышено количество запросов', status=429)
     else:
-        save_rate()
-        current = Cost_of_currency.objects.latest('id').value
-        return JsonResponse({'value': current})
+        try:
+            save_rate()
+        except Exception:
+            return exc
+        else:
+            current = Cost_of_currency.objects.latest('id').value
+            return JsonResponse({'value': current})
